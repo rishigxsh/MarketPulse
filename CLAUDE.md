@@ -770,12 +770,32 @@ For each completed phase, record:
 
 ---
 
-### Phase 1 — Project Setup ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
+### Phase 1 — Project Setup 🔄
+- Status: In Progress — all files written, awaiting Docker verify step
+- Files created/modified:
+  - `.gitignore`
+  - `.env.example`
+  - `docker-compose.yml`
+  - `backend/Dockerfile`
+  - `backend/requirements.txt`
+  - `backend/config.py`
+  - `backend/main.py`
+  - `backend/models/__init__.py`
+  - `backend/models/responses.py`
+  - `backend/routers/__init__.py`
+  - `backend/routers/health.py`
+  - `backend/services/__init__.py`
+  - `ingestion/__init__.py`
+  - `worker/__init__.py`
+  - `db/migrations/001_init.sql` (placeholder)
+- Key decisions:
+  - Used `lifespan` async context manager instead of deprecated `@app.on_event("startup")` — matches current FastAPI best practice
+  - Used `model_config = SettingsConfigDict(...)` instead of inner `class Config` — matches pydantic-settings v2 API
+  - `cors_origins` stored as comma-separated string in env; parsed to list via `cors_origins_list` property — avoids JSON parsing complexity in env files
+  - `APIResponse.timestamp` uses `Field(default_factory=...)` so each instance gets its own timestamp at creation time, not at class definition time
+  - `ingestion` and `worker` services defined in docker-compose with `profiles: [pipeline]` — they won't start until Phase 3/4
+- Verify result: PENDING — Docker Desktop not running. Manual step required before verify can complete.
+- Issues encountered: Docker not found in shell PATH. Docker Desktop must be opened manually before `docker compose up` can run.
 - Next phase notes: —
 
 ---

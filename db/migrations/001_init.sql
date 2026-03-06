@@ -1,0 +1,2 @@
+-- Placeholder: full schema will be written in Phase 2
+-- Run after: CREATE EXTENSION IF NOT EXISTS timescaledb;
