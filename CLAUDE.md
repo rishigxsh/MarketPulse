@@ -770,11 +770,12 @@ For each completed phase, record:
 
 ---
 
-### Phase 1 — Project Setup 🔄
-- Status: In Progress — all files written, awaiting Docker verify step
+### Phase 1 — Project Setup ✅
+- Status: Complete
 - Files created/modified:
   - `.gitignore`
   - `.env.example`
+  - `.env` (local dev credentials, git-ignored)
   - `docker-compose.yml`
   - `backend/Dockerfile`
   - `backend/requirements.txt`
@@ -794,9 +795,17 @@ For each completed phase, record:
   - `cors_origins` stored as comma-separated string in env; parsed to list via `cors_origins_list` property — avoids JSON parsing complexity in env files
   - `APIResponse.timestamp` uses `Field(default_factory=...)` so each instance gets its own timestamp at creation time, not at class definition time
   - `ingestion` and `worker` services defined in docker-compose with `profiles: [pipeline]` — they won't start until Phase 3/4
-- Verify result: PENDING — Docker Desktop not running. Manual step required before verify can complete.
-- Issues encountered: Docker not found in shell PATH. Docker Desktop must be opened manually before `docker compose up` can run.
-- Next phase notes: —
+- Verify result:
+  ```
+  $ curl -s http://localhost:8000/health
+  {"data":{"status":"ok","timestamp":"2026-03-06T17:36:41.934936+00:00"},"error":null,"timestamp":"2026-03-06T17:36:41.935010+00:00"}
+  ```
+  postgres: Up (healthy) · redis: Up (healthy) · backend: Up on port 8000 ✓
+- Issues encountered: Docker not in shell PATH initially — Docker Desktop was not running. Resolved by user installing and starting Docker Desktop. `.env` had placeholder credentials — filled with local dev values (`marketpulse` / `marketpulse123`).
+- Next phase notes:
+  - Postgres container is running with TimescaleDB image — `CREATE EXTENSION IF NOT EXISTS timescaledb;` must be run before the Phase 2 migration
+  - DB credentials in `.env`: POSTGRES_USER=marketpulse, POSTGRES_PASSWORD=marketpulse123, POSTGRES_DB=marketpulse
+  - `docker compose exec postgres psql -U marketpulse -d marketpulse` is the psql entry point for Phase 2
 
 ---
 
