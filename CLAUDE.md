@@ -809,13 +809,33 @@ For each completed phase, record:
 
 ---
 
-### Phase 2 — Database Layer ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
-- Next phase notes: —
+### Phase 2 — Database Layer ✅
+- Status: Complete
+- Files created/modified:
+  - `db/migrations/001_init.sql` (full schema replacing Phase 1 placeholder)
+- Key decisions:
+  - `PRIMARY KEY (symbol, timestamp)` on `crypto_prices` — TimescaleDB requires the partition column (timestamp) to be part of the PK; composite key enforces no duplicate prices for the same coin at the same instant
+  - `create_hypertable(..., if_not_exists => TRUE)` — makes migration idempotent, safe to re-run
+  - `chunk_time_interval => INTERVAL '1 day'` — default 1-day chunks, appropriate for 60s ingestion cadence
+  - Added `CHECK (direction IN ('above', 'below'))` constraint on `price_alerts.direction` — enforces valid values at the DB level rather than relying only on app validation
+  - Partial index `WHERE triggered = FALSE` on `price_alerts` — only indexes untriggered alerts, keeps the alert-check loop fast as triggered alerts accumulate
+- Verify result:
+  ```
+  hypertable_name | num_dimensions | num_chunks
+  -----------------+----------------+------------
+  crypto_prices   |              1 |          0
+
+  Schema |     Name      | Type  |    Owner
+  --------+---------------+-------+-------------
+  public | crypto_prices | table | marketpulse
+  public | price_alerts  | table | marketpulse
+  ```
+  `crypto_prices` confirmed as hypertable · both tables present · composite PK and indexes applied ✓
+- Issues encountered: postgres MCP server connects to `postgresql://localhost/dev` (system default), not the marketpulse DB — used `docker compose exec postgres psql` for all verification instead. TimescaleDB extension was already pre-loaded by the Docker image — `CREATE EXTENSION` returned a NOTICE (not an error).
+- Next phase notes:
+  - Phase 3 (ingestion) pushes JSON to Redis key `marketpulse:prices:queue`
+  - Phase 4 (worker) reads from that queue and INSERTs into `crypto_prices` using the exact column names: `symbol, name, price_usd, market_cap, volume_24h, price_change_24h, timestamp`
+  - The `timestamp` value must come from CoinGecko's `last_updated` field (ISO string) — not the worker's wall clock
 
 ---
 
