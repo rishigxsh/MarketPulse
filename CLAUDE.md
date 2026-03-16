@@ -7,28 +7,28 @@ Read it fully before writing or modifying any code.
 
 ## 1. Project Overview & Architecture Summary
 
-**MarketPulse** is a real-time financial data pipeline that ingests cryptocurrency market data,
+**MarketPulse** is a real-time financial data pipeline that ingests cryptocurrency and stock market data,
 stores it in a time-series database, exposes it via a REST API, and visualizes it in a React dashboard.
 
 ### High-Level Architecture
 
 ```
-CoinGecko API (external)
-        │
+CoinGecko API (crypto)     Finnhub API (stocks)
+        │                          │
+        ▼                          ▼
+[ Python Ingestion Script — dual fetcher ]
+        │  pushes JSON messages to separate queues
         ▼
-[ Python Ingestion Script ]
-        │  pushes JSON messages
+[ Redis Queues (marketpulse:prices:queue + marketpulse:stocks:queue) ]
+        │  worker BLPOPs from both queues
         ▼
-[ Redis Queue (List / Stream) ]
-        │  worker pops messages
-        ▼
-[ TimescaleDB (PostgreSQL) ]
+[ TimescaleDB (crypto_prices + stock_prices hypertables) ]
         │  queried by
         ▼
-[ FastAPI Backend ]
+[ FastAPI Backend — /prices/* + /stocks/* + /alerts/* ]
         │  consumed by
         ▼
-[ React + Vite Frontend ]
+[ React + Vite Frontend (nginx in Docker) ]
 ```
 
 Data flows strictly in one direction: ingestion → storage → API → UI.
@@ -604,6 +604,8 @@ docker compose exec postgres psql -U $POSTGRES_USER -d $POSTGRES_DB \
 
 ### Phase 5 — FastAPI Backend
 
+> **MODEL: Sonnet** — Well-specified plan, standard FastAPI/asyncpg/Redis patterns. No architectural ambiguity.
+
 **Goal:** REST API exposing price data with Redis caching. All responses use `APIResponse[T]` envelope.
 
 | File | Purpose |
@@ -640,6 +642,8 @@ curl -X POST http://localhost:8000/alerts \
 
 ### Phase 6 — Price Alert System
 
+> **MODEL: Sonnet** — Small scope (3 files), simple background loop + price comparison logic. No complex design decisions.
+
 **Goal:** FastAPI background task polls `crypto_prices` every 30s, checks untriggered alerts, marks triggered ones.
 
 | File | Purpose |
@@ -662,6 +666,8 @@ docker compose logs backend | grep "Alert triggered"
 ---
 
 ### Phase 7 — React Frontend
+
+> **MODEL: Opus** — 15+ files, complex component hierarchy, React Query + Recharts + localStorage + dark theme + coordinated state across panels. Highest complexity phase in the project.
 
 **Goal:** React + Vite dashboard with live price cards, historical chart, watchlist, and alerts panel.
 
@@ -707,6 +713,8 @@ cd frontend && npm run dev
 ---
 
 ### Phase 8 — Deployment
+
+> **MODEL: Sonnet** — Config files, Dockerfiles, and documentation. No logic or design decisions.
 
 **Goal:** Finalize Docker Compose for full local stack and write production deployment instructions.
 
@@ -839,63 +847,237 @@ For each completed phase, record:
 
 ---
 
-### Phase 3 — Ingestion Layer ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
-- Next phase notes: —
+### Phase 3 — Ingestion Layer ✅
+- Status: Complete
+- Files created/modified:
+  - `ingestion/requirements.txt`
+  - `ingestion/Dockerfile`
+  - `ingestion/config.py`
+  - `ingestion/models.py`
+  - `ingestion/fetcher.py`
+  - `ingestion/publisher.py`
+  - `ingestion/main.py`
+  - `.env.example` (removed COINGECKO_API_KEY)
+  - `backend/config.py` (removed coingecko_api_key field)
+- Key decisions:
+  - No API key — public CoinGecko endpoint used, no auth header
+  - `coingecko_base_url` kept in config so it can be overridden via env without code changes
+  - `rpush(*payloads)` batches all 50 coins in a single Redis call — more efficient than 50 individual calls
+  - `redis.Redis` (sync) used in publisher — the ingestion loop is async but Redis publish is a fast local network call; avoids `aioredis` dependency complexity
+  - `run_cycle()` is wrapped in try/except in `main()` so one bad cycle never crashes the process
+  - Fetch interval changed from 60s → 30s (2 calls/min, well within public rate limit of ~30/min)
+- Verify result:
+  ```
+  HTTP Request: GET https://api.coingecko.com/api/v3/coins/markets?... "HTTP/1.1 200 OK"
+  Fetched 50 coins from CoinGecko
+  Published 50 messages to queue
+  LLEN marketpulse:prices:queue → 650
+  LRANGE 0 0 → {"id":"bitcoin","symbol":"btc","current_price":68348.0,...}
+  ```
+- Issues encountered: First run hit `TLSV1_ALERT_DECODE_ERROR` — transient network error on container startup. Rebuild resolved it. Added `ca-certificates` install to Dockerfile as a precaution.
+- Next phase notes:
+  - Queue key is `marketpulse:prices:queue` (RPUSH/BLPOP)
+  - Each message is JSON matching `CoinGeckoPrice` model fields: `id, symbol, name, current_price, market_cap, total_volume, price_change_percentage_24h, last_updated`
+  - Worker must map `current_price → price_usd`, `total_volume → volume_24h`, `price_change_percentage_24h → price_change_24h`, `last_updated → timestamp`
+  - Worker uses BLPOP with timeout=5s on the same key
 
 ---
 
-### Phase 4 — Queue Consumer (Worker) ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
-- Next phase notes: —
+### Phase 4 — Queue Consumer (Worker) ✅
+- Status: Complete
+- Files created/modified:
+  - `worker/requirements.txt`
+  - `worker/Dockerfile`
+  - `worker/config.py`
+  - `worker/models.py`
+  - `worker/db.py`
+  - `worker/main.py`
+- Key decisions:
+  - `asyncio.to_thread()` wraps the blocking `BLPOP` call — keeps the async event loop free while waiting for queue messages without adding `aioredis` as a dependency
+  - `ON CONFLICT (symbol, timestamp) DO NOTHING` in INSERT — makes writes idempotent; handles queue replay or duplicate messages gracefully
+  - `PriceRecord.parse_timestamp` validator normalises CoinGecko's ISO string (which uses `+00:00` suffix) to a proper Python `datetime` before asyncpg receives it
+  - `market_cap` and `total_volume` stored as `float` in `PriceRecord` (matching the ingestion fix) — cast to `NUMERIC` by asyncpg when writing to `crypto_prices`
+  - asyncpg pool: `min_size=2, max_size=5` — sufficient for single-worker throughput at 50 records/30s
+  - Redis client pings on startup; hard-fails with logged error if unreachable rather than silently entering a broken loop
+- Verify result:
+  ```
+  worker-1  | 2026-03-15 20:48:56 [INFO] db: Wrote price record: BTC @ 71792.0
+  worker-1  | 2026-03-15 20:48:56 [INFO] db: Wrote price record: BNB @ 664.25
+  ...
+  SELECT COUNT(*) FROM crypto_prices; → 3651 rows (and growing every 30s)
+  SELECT symbol, price_usd, timestamp FROM crypto_prices ORDER BY timestamp DESC LIMIT 5;
+  → btc | 71792.00 | 2026-03-15 20:48:13+00
+  ```
+- Issues encountered: None — built and started cleanly on first attempt.
+- Next phase notes:
+  - TimescaleDB now has live data — Phase 5 can query `crypto_prices` immediately
+  - `price_usd`, `market_cap`, `volume_24h` are stored as `NUMERIC(20,8)` / `BIGINT` in DB but ingested as `float` — Phase 5 queries should cast or use Python `float()` when reading back
+  - All 5 services now run under `--profile pipeline`: `docker compose --profile pipeline up -d`
+  - DB credentials unchanged: `marketpulse / marketpulse123 / marketpulse`
 
 ---
 
-### Phase 5 — FastAPI Backend ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
-- Next phase notes: —
+### Phase 5 — FastAPI Backend ✅
+- Status: Complete
+- Files created/modified:
+  - `backend/models/db.py`
+  - `backend/services/cache.py`
+  - `backend/services/db.py`
+  - `backend/routers/prices.py`
+  - `backend/main.py` (updated — added asyncpg pool + Redis to lifespan, registered prices router)
+- Key decisions:
+  - `app.state.pool` and `app.state.redis` set in lifespan, accessed in routers via `request.app.state` — clean DI without global singletons
+  - `redis.asyncio` used (already in requirements as `redis==5.2.1`) — avoids extra `aioredis` dependency
+  - Cache errors are swallowed with a warning log (never break a request due to cache failure) — explicit design decision in cache.py
+  - History SQL uses `time_bucket` for `1h`/`1d` intervals — native TimescaleDB function, no Python-side aggregation
+  - `from` is a Python keyword — exposed as `Query(alias="from")` in the history endpoint; Python variable is `from_time`
+  - `ON CONFLICT DO NOTHING` not needed here — reads only. Symbol stored as lowercase ticker (`btc`, `eth`) from CoinGecko, so history queries must use ticker not name (e.g. `/prices/btc/history`, not `/prices/bitcoin/history`)
+  - `CreateAlertRequest` validates direction ('above'/'below') and target_price (>0) at the Pydantic layer before hitting the DB
+- Verify result:
+  ```
+  GET /prices/latest → 50 coins with live prices ✓
+  GET /prices/btc/history?from=...&to=... → 16 BTC rows ✓
+  POST /alerts → {"id":1,"symbol":"bitcoin","target_price":1.0,...} ✓
+  GET /alerts → [{"id":1,...}] ✓
+  DELETE /alerts/1 → {"data":null,"error":null} ✓
+  Backend logs: TimescaleDB pool created + Redis OK on startup ✓
+  ```
+- Issues encountered:
+  - History for `/prices/bitcoin/history` returned empty — CoinGecko stores `symbol: 'btc'`, not `'bitcoin'`. History endpoint must be called with the ticker symbol. Documented in key decisions.
+- Next phase notes:
+  - Phase 6 needs `app.state.pool` and `app.state.redis` (already on app.state) for the alert check background task
+  - Alert check loop queries `price_alerts WHERE triggered = FALSE` then latest price per symbol from `crypto_prices`
+  - `backend/services/alerts.py` is a new file; `backend/main.py` and `backend/routers/prices.py` need small additions
 
 ---
 
-### Phase 6 — Price Alert System ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
-- Next phase notes: —
+### Phase 6 — Price Alert System ✅
+- Status: Complete
+- Files created/modified:
+  - `backend/services/alerts.py` (new)
+  - `backend/services/db.py` (added `get_triggered_alerts`)
+  - `backend/routers/prices.py` (added `GET /alerts/triggered`)
+  - `backend/main.py` (added alert loop task in lifespan)
+- Key decisions:
+  - Alert check and DB trigger happen in a single acquired connection per cycle — no partial writes if one alert update fails
+  - `check_alerts` catches all exceptions and logs them; the background loop never crashes the backend
+  - Background task is cancelled cleanly on shutdown via `task.cancel()` + `await task` in the lifespan teardown
+  - `GET /alerts/triggered` route declared before `DELETE /alerts/{alert_id}` to avoid FastAPI routing the literal string "triggered" as an integer path param
+  - `get_triggered_alerts` added to `services/db.py` rather than inlining in the router — keeps DB logic in the service layer
+- Verify result:
+  ```
+  POST /alerts {"symbol":"btc","target_price":1,"direction":"above"} → id=3, triggered=false
+  # 30s later...
+  GET /alerts/triggered → [{"id":3,"triggered":true,"triggered_at":"2026-03-15T21:10:05Z"}]
+  Backend log: "Alert triggered: id=3 btc above 1.00000000 (current=71676.00000000)"
+  Backend log: "Alert loop: 1 alert(s) triggered this cycle"
+  ```
+- Issues encountered: None.
+- Next phase notes:
+  - Before Phase 7, run the `simplify` skill for a full code review pass (per CLAUDE.md rules)
+  - Switch to **Opus** for Phase 7 (`/model opus`)
+  - Phase 7 requires a manual step: scaffold Vite + React from `frontend/` directory before Claude writes any files
 
 ---
 
-### Phase 7 — React Frontend ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
-- Next phase notes: —
+### Phase 7 — React Frontend ✅
+- Status: Complete
+- Files created/modified:
+  - `frontend/vite.config.ts` — Tailwind CSS plugin + API proxy for dev (`/prices`, `/stocks`, `/alerts`, `/health` → localhost:8000)
+  - `frontend/src/index.css` — Replaced Vite scaffold CSS with `@import "tailwindcss";`
+  - `frontend/src/main.tsx` — QueryClientProvider wrapper with 15s stale time
+  - `frontend/src/App.tsx` — Root layout, dark theme, subtitle "Real-Time Stock & Crypto Dashboard"
+  - `frontend/src/types/index.ts` — TypeScript interfaces: `APIResponse<T>`, `CryptoPrice`, `StockPrice`, `PriceAlert`, `CreateAlertPayload`
+  - `frontend/src/api/prices.ts` — `fetchLatestPrices()`, `fetchPriceHistory()` axios wrappers
+  - `frontend/src/api/stocks.ts` — `fetchLatestStocks()`, `fetchStockHistory()` axios wrappers
+  - `frontend/src/api/alerts.ts` — `fetchAlerts()`, `createAlert()`, `deleteAlert()` axios wrappers
+  - `frontend/src/hooks/usePrices.ts` — `useLatestPrices()` with 30s refetch
+  - `frontend/src/hooks/usePriceHistory.ts` — `usePriceHistory(symbol, from, to, interval)`
+  - `frontend/src/hooks/useAlerts.ts` — `useAlerts()`, `useCreateAlert()`, `useDeleteAlert()`
+  - `frontend/src/hooks/useStocks.ts` — `useLatestStocks()`, `useStockHistory()`
+  - `frontend/src/components/PriceCard.tsx` — Reusable card for both crypto and stock prices
+  - `frontend/src/components/PriceGrid.tsx` — Grid of crypto PriceCards with skeleton loaders
+  - `frontend/src/components/PriceChart.tsx` — Recharts LineChart for crypto, 24h/7d/30d range, indigo theme
+  - `frontend/src/components/StockGrid.tsx` — Grid of stock PriceCards, empty state when no Finnhub key
+  - `frontend/src/components/StockChart.tsx` — Recharts LineChart for stocks, emerald green theme
+  - `frontend/src/components/Watchlist.tsx` — localStorage-backed pinned coins, search-to-add (list hidden until typing)
+  - `frontend/src/components/AlertsPanel.tsx` — Alert list + create form, triggered alerts in amber
+  - `frontend/src/components/SkeletonCard.tsx` — Tailwind pulse skeleton for loading states
+  - `frontend/src/pages/Dashboard.tsx` — Crypto/Stocks tab switcher, separate state per tab
+- Key decisions:
+  - **Tab-based navigation** for Crypto vs Stocks rather than side-by-side — cleaner UX with separate PriceGrid, Chart, and Watchlist per tab
+  - **Relative API URLs** (`baseURL: ""`) — works with both Vite dev proxy and nginx reverse proxy in production
+  - **Recharts color themes** — indigo for crypto, emerald for stocks to visually distinguish asset types
+  - **Watchlist search** — coin list hidden until user types in search input (avoids overwhelming dropdown)
+  - **Chart height** uses `flex-1 min-h-0` with `ResponsiveContainer height="100%"` for dynamic alignment with sidebar
+  - **Analysis panels** (Watchlist + Alerts) positioned at the top alongside the chart, not below
+  - Added `react-is` as explicit dependency (Recharts peer dep, Vite build failed without it)
+- Verify result:
+  - `npm run dev` → http://localhost:5173 loads with live crypto prices updating every 30s ✓
+  - Clicking a coin loads its chart ✓
+  - Alert creation and deletion works ✓
+  - Stocks tab shows stock data when Finnhub key is configured ✓
+  - No console errors ✓
+- Issues encountered:
+  - **Recharts TypeScript types** — `labelFormatter` and `formatter` on Tooltip had type incompatibilities. Fixed by removing explicit type annotations and using `Number()` casts.
+  - **Missing react-is** — Recharts requires `react-is` as peer dep. Vite build failed. Fixed with `npm install react-is --legacy-peer-deps`.
+- Next phase notes:
+  - Frontend needs nginx config for Docker deployment (API proxy locations)
+  - `VITE_API_BASE_URL` is a build-time variable (baked into JS bundle by Vite)
 
 ---
 
-### Phase 8 — Deployment ⬜
-- Status: Not started
-- Files created/modified: —
-- Key decisions: —
-- Verify result: —
-- Issues encountered: —
-- Next phase notes: —
+### Phase 7.5 — Stock Data Ingestion ✅
+- Status: Complete (added mid-Phase 7 as a feature expansion)
+- Files created/modified:
+  - `db/migrations/002_stock_prices.sql` — `stock_prices` hypertable, same schema as `crypto_prices`
+  - `ingestion/stock_fetcher.py` — Fetches quotes from Finnhub for 25 US stocks (AAPL, MSFT, GOOGL, etc.)
+  - `ingestion/config.py` — Added `finnhub_api_key: str = ""`
+  - `ingestion/publisher.py` — Added `publish_stocks()`, separate `STOCK_QUEUE_KEY = "marketpulse:stocks:queue"`
+  - `ingestion/main.py` — Added stock fetch cycle (only runs if `finnhub_api_key` is set)
+  - `worker/db.py` — Added `INSERT_STOCK_SQL`, `write_price()` takes `table` param
+  - `worker/main.py` — BLPOP from both queues `[CRYPTO_QUEUE_KEY, STOCK_QUEUE_KEY]`, determines table from queue key
+  - `backend/models/db.py` — Added `StockPrice` model
+  - `backend/services/db.py` — Added `get_latest_stocks()`, `get_stock_history()` with stock SQL constants
+  - `backend/routers/stocks.py` — `/stocks/latest` and `/stocks/{symbol}/history` with Redis caching
+  - `backend/main.py` — Registered stocks router
+  - `.env.example` — Added `FINNHUB_API_KEY`
+- Key decisions:
+  - **Parallel infrastructure** — separate table, queue, endpoints rather than modifying existing crypto pipeline
+  - **Finnhub API key optional** — stock ingestion only runs if `FINNHUB_API_KEY` is set in `.env`
+  - **BLPOP on multiple keys** — worker consumes from both `marketpulse:prices:queue` and `marketpulse:stocks:queue`
+  - **25 hardcoded US stocks** — AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, etc. (Finnhub free tier: 60 calls/min)
+  - Finnhub returns `c` (current price), `dp` (percent change) — mapped to same schema as crypto
+
+---
+
+### Phase 8 — Deployment 🔄
+- Status: In Progress (Docker setup complete, nginx proxy issue under investigation)
+- Files created/modified:
+  - `docker-compose.yml` — Removed `profiles` from ingestion/worker, added `frontend` service (nginx on port 80), all 6 services run by default
+  - `docker-compose.prod.yml` — Production overrides with `restart: always`
+  - `frontend/Dockerfile` — Multi-stage build: Node 20 → nginx:alpine, `VITE_API_BASE_URL` as build ARG
+  - `frontend/nginx.conf` — SPA routing + API proxy locations (`/prices`, `/stocks`, `/alerts`, `/health` → `http://backend:8000`)
+  - `backend/.dockerignore`, `ingestion/.dockerignore`, `worker/.dockerignore`, `frontend/.dockerignore`
+  - `DEPLOYMENT.md` — Step-by-step deployment guide for Supabase + Render + Upstash + Vercel
+  - `.env.example` — Updated with all current env vars
+- Key decisions:
+  - **Nginx reverse proxy** for API routes — frontend and API served from same origin (port 80), eliminating CORS issues
+  - **`VITE_API_BASE_URL` defaults to empty string** — relative URLs work with nginx proxy; no hardcoded localhost
+  - **6 services in docker-compose** — postgres, redis, backend, ingestion, worker, frontend (all start by default)
+  - Frontend Dockerfile uses `--legacy-peer-deps` for npm ci (Recharts peer dep issues)
+- Verify result:
+  - `docker compose up --build` — all 6 services start ✓
+  - `curl http://localhost/prices/latest` — returns data through nginx proxy ✓
+  - `curl http://localhost/health` — returns ok ✓
+  - **Browser at http://localhost** — shows "Failed to load prices" (under investigation)
+- Issues encountered:
+  - **CORS/proxy issue** — Frontend at port 80 was making API calls to `http://localhost:8000` (hardcoded fallback). Fixed by changing all API `baseURL` fallbacks to `""` (relative URLs) and nginx proxy config.
+  - **Docker build cache** — After changing source files, `docker compose up --build` kept producing same JS bundle hash (`index-4OpgwU99.js`), suggesting the build cache wasn't being invalidated properly. May need `--no-cache` flag.
+  - **Browser caching** — Old JS bundle may be cached in browser. Hard refresh (Cmd+Shift+R) needed after rebuild.
+- Next phase notes:
+  - Need to verify `docker compose up --build --no-cache` for frontend to ensure source changes are picked up
+  - Browser should work at http://localhost after cache-busted rebuild
 
 ---
 

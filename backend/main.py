@@ -1,14 +1,20 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+import asyncpg
+import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
 from models.responses import APIResponse
-from routers import health
+from routers import health, prices, stocks
+from services.alerts import check_alerts
+
+ALERT_CHECK_INTERVAL = 30  # seconds
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,11 +23,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _alert_loop(pool: asyncpg.Pool) -> None:
+    """Background task: check price alerts on a fixed interval."""
+    logger.info("Alert check loop started (interval=%ds)", ALERT_CHECK_INTERVAL)
+    while True:
+        await asyncio.sleep(ALERT_CHECK_INTERVAL)
+        triggered = await check_alerts(pool)
+        if triggered:
+            logger.info("Alert loop: %d alert(s) triggered this cycle", len(triggered))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("MarketPulse backend starting up")
+
+    # --- asyncpg connection pool ---
+    app.state.pool = await asyncpg.create_pool(
+        dsn=settings.postgres_dsn,
+        min_size=2,
+        max_size=10,
+        command_timeout=30,
+    )
+    logger.info("TimescaleDB connection pool created")
+
+    # --- Redis async client ---
+    app.state.redis = aioredis.Redis(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        password=settings.redis_password or None,
+        decode_responses=True,
+    )
+    await app.state.redis.ping()
+    logger.info("Redis connection OK")
+
+    # --- Alert background task ---
+    task = asyncio.create_task(_alert_loop(app.state.pool))
+
     yield
-    logger.info("MarketPulse backend shutting down")
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # --- Graceful shutdown ---
+    await app.state.pool.close()
+    await app.state.redis.aclose()
+    logger.info("MarketPulse backend shut down cleanly")
 
 
 app = FastAPI(
@@ -50,3 +99,5 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 
 app.include_router(health.router)
+app.include_router(prices.router)
+app.include_router(stocks.router)
