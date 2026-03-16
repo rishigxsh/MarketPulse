@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     redis_host: str
     redis_port: int = 6379
     redis_password: str = ""
+    redis_ssl: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

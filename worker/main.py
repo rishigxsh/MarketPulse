@@ -26,6 +26,7 @@ def get_redis_client() -> redis.Redis:
         port=settings.redis_port,
         password=settings.redis_password or None,
         decode_responses=True,
+        ssl=settings.redis_ssl,
     )
 
 

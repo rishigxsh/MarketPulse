@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         port=settings.redis_port,
         password=settings.redis_password or None,
         decode_responses=True,
+        ssl=settings.redis_ssl,
     )
     await app.state.redis.ping()
     logger.info("Redis connection OK")

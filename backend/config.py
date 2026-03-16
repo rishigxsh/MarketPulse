@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str = ""
+    redis_ssl: bool = False
 
     # FastAPI
     api_host: str = "0.0.0.0"

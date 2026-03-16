@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str = ""
+    redis_ssl: bool = False
 
     fetch_interval_seconds: int = 30
     coingecko_base_url: str = "https://api.coingecko.com/api/v3"
