@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     redis_password: str = ""
     redis_ssl: bool = False
 
+    # Ingestion
+    coingecko_base_url: str = "https://api.coingecko.com/api/v3"
+    finnhub_api_key: str = ""
+    fetch_interval_seconds: int = 60
+
     # FastAPI
     api_host: str = "0.0.0.0"
     api_port: int = 8000

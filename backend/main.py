@@ -13,6 +13,7 @@ from config import settings
 from models.responses import APIResponse
 from routers import health, prices, stocks
 from services.alerts import check_alerts
+from services.ingestion import run_ingestion_cycle
 
 ALERT_CHECK_INTERVAL = 30  # seconds
 
@@ -31,6 +32,17 @@ async def _alert_loop(pool: asyncpg.Pool) -> None:
         triggered = await check_alerts(pool)
         if triggered:
             logger.info("Alert loop: %d alert(s) triggered this cycle", len(triggered))
+
+
+async def _ingestion_loop(pool: asyncpg.Pool) -> None:
+    """Background task: fetch prices and write to DB every FETCH_INTERVAL_SECONDS."""
+    logger.info("Ingestion loop started (interval=%ds)", settings.fetch_interval_seconds)
+    while True:
+        try:
+            await run_ingestion_cycle(pool)
+        except Exception as e:
+            logger.error("Ingestion cycle error: %s", e)
+        await asyncio.sleep(settings.fetch_interval_seconds)
 
 
 @asynccontextmanager
@@ -68,16 +80,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await app.state.redis.ping()
     logger.info("Redis connection OK")
 
-    # --- Alert background task ---
-    task = asyncio.create_task(_alert_loop(app.state.pool))
+    # --- Background tasks ---
+    alert_task = asyncio.create_task(_alert_loop(app.state.pool))
+    ingestion_task = asyncio.create_task(_ingestion_loop(app.state.pool))
 
     yield
 
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    alert_task.cancel()
+    ingestion_task.cancel()
+    for t in (alert_task, ingestion_task):
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
 
     # --- Graceful shutdown ---
     await app.state.pool.close()
