@@ -60,6 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.redis = aioredis.Redis(
         host=settings.redis_host,
         port=settings.redis_port,
+        username="default" if settings.redis_ssl else None,
         password=settings.redis_password or None,
         decode_responses=True,
         ssl=settings.redis_ssl,
