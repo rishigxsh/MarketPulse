@@ -99,7 +99,11 @@ async def main() -> None:
         raise
 
     pool = await asyncpg.create_pool(
-        dsn=settings.postgres_dsn,
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        database=settings.postgres_db,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
         min_size=2,
         max_size=5,
         command_timeout=30,
