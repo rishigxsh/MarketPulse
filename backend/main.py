@@ -38,6 +38,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("MarketPulse backend starting up")
 
     # --- asyncpg connection pool ---
+    logger.info(
+        "Connecting to PostgreSQL: host=%s port=%s db=%s user=%s pass=%s",
+        settings.postgres_host, settings.postgres_port,
+        settings.postgres_db, settings.postgres_user,
+        settings.postgres_password[:4] + "****" if settings.postgres_password else "EMPTY",
+    )
     app.state.pool = await asyncpg.create_pool(
         host=settings.postgres_host,
         port=settings.postgres_port,
