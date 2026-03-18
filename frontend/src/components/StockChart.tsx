@@ -15,7 +15,7 @@ interface Props {
 }
 
 const RANGES = [
-  { label: "24h", hours: 24, interval: undefined },
+  { label: "24h", hours: 24, interval: "1h" },
   { label: "7d", hours: 168, interval: "1h" },
   { label: "30d", hours: 720, interval: "1d" },
 ] as const;
