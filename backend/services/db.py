@@ -31,30 +31,30 @@ _HISTORY_RAW_SQL = """
 _HISTORY_BUCKETED_1H_SQL = """
     SELECT
         symbol,
-        MAX(name)                                  AS name,
-        AVG(price_usd)                             AS price_usd,
-        AVG(market_cap)                            AS market_cap,
-        AVG(volume_24h)                            AS volume_24h,
-        AVG(price_change_24h)                      AS price_change_24h,
-        time_bucket('1 hour'::interval, timestamp) AS timestamp
+        MAX(name)                       AS name,
+        AVG(price_usd)                  AS price_usd,
+        AVG(market_cap)                 AS market_cap,
+        AVG(volume_24h)                 AS volume_24h,
+        AVG(price_change_24h)           AS price_change_24h,
+        date_trunc('hour', timestamp)   AS timestamp
     FROM crypto_prices
     WHERE symbol = $1 AND timestamp BETWEEN $2 AND $3
-    GROUP BY symbol, time_bucket('1 hour'::interval, timestamp)
+    GROUP BY symbol, date_trunc('hour', timestamp)
     ORDER BY timestamp ASC
 """
 
 _HISTORY_BUCKETED_1D_SQL = """
     SELECT
         symbol,
-        MAX(name)                                 AS name,
-        AVG(price_usd)                            AS price_usd,
-        AVG(market_cap)                           AS market_cap,
-        AVG(volume_24h)                           AS volume_24h,
-        AVG(price_change_24h)                     AS price_change_24h,
-        time_bucket('1 day'::interval, timestamp) AS timestamp
+        MAX(name)                      AS name,
+        AVG(price_usd)                 AS price_usd,
+        AVG(market_cap)                AS market_cap,
+        AVG(volume_24h)                AS volume_24h,
+        AVG(price_change_24h)          AS price_change_24h,
+        date_trunc('day', timestamp)   AS timestamp
     FROM crypto_prices
     WHERE symbol = $1 AND timestamp BETWEEN $2 AND $3
-    GROUP BY symbol, time_bucket('1 day'::interval, timestamp)
+    GROUP BY symbol, date_trunc('day', timestamp)
     ORDER BY timestamp ASC
 """
 
@@ -80,30 +80,30 @@ _STOCK_HISTORY_RAW_SQL = """
 _STOCK_HISTORY_BUCKETED_1H_SQL = """
     SELECT
         symbol,
-        MAX(name)                                  AS name,
-        AVG(price_usd)                             AS price_usd,
-        AVG(market_cap)                            AS market_cap,
-        AVG(volume_24h)                            AS volume_24h,
-        AVG(price_change_24h)                      AS price_change_24h,
-        time_bucket('1 hour'::interval, timestamp) AS timestamp
+        MAX(name)                       AS name,
+        AVG(price_usd)                  AS price_usd,
+        AVG(market_cap)                 AS market_cap,
+        AVG(volume_24h)                 AS volume_24h,
+        AVG(price_change_24h)           AS price_change_24h,
+        date_trunc('hour', timestamp)   AS timestamp
     FROM stock_prices
     WHERE symbol = $1 AND timestamp BETWEEN $2 AND $3
-    GROUP BY symbol, time_bucket('1 hour'::interval, timestamp)
+    GROUP BY symbol, date_trunc('hour', timestamp)
     ORDER BY timestamp ASC
 """
 
 _STOCK_HISTORY_BUCKETED_1D_SQL = """
     SELECT
         symbol,
-        MAX(name)                                 AS name,
-        AVG(price_usd)                            AS price_usd,
-        AVG(market_cap)                           AS market_cap,
-        AVG(volume_24h)                           AS volume_24h,
-        AVG(price_change_24h)                     AS price_change_24h,
-        time_bucket('1 day'::interval, timestamp) AS timestamp
+        MAX(name)                      AS name,
+        AVG(price_usd)                 AS price_usd,
+        AVG(market_cap)                AS market_cap,
+        AVG(volume_24h)                AS volume_24h,
+        AVG(price_change_24h)          AS price_change_24h,
+        date_trunc('day', timestamp)   AS timestamp
     FROM stock_prices
     WHERE symbol = $1 AND timestamp BETWEEN $2 AND $3
-    GROUP BY symbol, time_bucket('1 day'::interval, timestamp)
+    GROUP BY symbol, date_trunc('day', timestamp)
     ORDER BY timestamp ASC
 """
 
