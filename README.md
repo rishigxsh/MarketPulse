@@ -2,7 +2,7 @@
 
 A full-stack financial data pipeline that ingests real-time cryptocurrency and stock market data, stores it in a time-series database, and visualizes it through an interactive dashboard.
 
-**Live:** https://market-pulse-rouge.vercel.app
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-market--pulse--rouge.vercel.app-brightgreen?logo=vercel)](https://market-pulse-rouge.vercel.app)
 
 ![React](https://img.shields.io/badge/React-18-blue?logo=react)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110-green?logo=fastapi)
