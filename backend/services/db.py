@@ -8,12 +8,27 @@ from models.db import CryptoPrice, PriceAlert, StockPrice
 
 logger = logging.getLogger(__name__)
 
-# Latest price per coin — DISTINCT ON picks the newest row per symbol
+# Latest price per coin — uses most recent row for price/timestamp,
+# but falls back to most recent non-null price_change_24h if latest row has none.
 _LATEST_PRICES_SQL = """
-    SELECT DISTINCT ON (symbol)
-        symbol, name, price_usd, market_cap, volume_24h, price_change_24h, timestamp
-    FROM crypto_prices
-    ORDER BY symbol, timestamp DESC
+    WITH latest AS (
+        SELECT DISTINCT ON (symbol)
+            symbol, name, price_usd, market_cap, volume_24h, price_change_24h, timestamp
+        FROM crypto_prices
+        ORDER BY symbol, timestamp DESC
+    ),
+    latest_change AS (
+        SELECT DISTINCT ON (symbol)
+            symbol, price_change_24h AS change
+        FROM crypto_prices
+        WHERE price_change_24h IS NOT NULL
+        ORDER BY symbol, timestamp DESC
+    )
+    SELECT l.symbol, l.name, l.price_usd, l.market_cap, l.volume_24h,
+           COALESCE(l.price_change_24h, lc.change) AS price_change_24h,
+           l.timestamp
+    FROM latest l
+    LEFT JOIN latest_change lc ON l.symbol = lc.symbol
 """
 
 # Raw history rows for a symbol in a time range, newest first, capped at 1000
